@@ -8,3 +8,4 @@ imbalanced-learn
 joblib
 kaggle
 jupyter
+streamlit
