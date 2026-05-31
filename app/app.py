@@ -28,7 +28,20 @@ THRESH_PATH = "models/thresholds.json"
 
 @st.cache_resource
 def load_resources(model_path=MODEL_PATH, thresh_path=THRESH_PATH):
-    preproc, model, le = load_model(model_path)
+    # try primary model path, fall back to demo model if tuned not present
+    try:
+        preproc, model, le = load_model(model_path)
+    except FileNotFoundError:
+        alt_path = ROOT / "models" / "xgb_flood.pkl"
+        if alt_path.exists():
+            try:
+                preproc, model, le = load_model(str(alt_path))
+                # update model_path so UI can report correct file
+                model_path = str(alt_path)
+            except Exception:
+                preproc, model, le = None, None, None
+        else:
+            preproc, model, le = None, None, None
     thresholds = {}
     if Path(thresh_path).exists():
         with open(thresh_path, "r") as f:
@@ -45,6 +58,7 @@ def load_resources(model_path=MODEL_PATH, thresh_path=THRESH_PATH):
 
 
 preproc, model, le, thresholds, sample_df = load_resources()
+MODEL_AVAILABLE = model is not None
 
 # Sidebar with model info
 with st.sidebar:
@@ -92,21 +106,29 @@ with predict_tab:
     col1, col2 = st.columns([1, 1])
     with col1:
         st.subheader("Single sample prediction")
-        with st.form("input_form"):
-            rainfall = st.number_input("Rainfall (mm)", value=45.0, step=1.0, format="%.1f")
-            soil = st.slider("Soil saturation (%)", min_value=0.0, max_value=100.0, value=60.0)
-            elevation = st.number_input("Elevation (m)", value=30.0, step=1.0)
-            temperature = st.number_input("Temperature (°C)", value=24.0, step=0.1, format="%.1f")
-            humidity = st.slider("Humidity (%)", min_value=0.0, max_value=100.0, value=75.0)
-            submitted = st.form_submit_button("Predict")
+        if not MODEL_AVAILABLE:
+            st.warning("No trained model found. Put a model file at `models/xgb_flood_tuned.pkl` or run demo training to generate `models/xgb_flood.pkl`.")
+            submitted = False
+            rainfall = soil = elevation = temperature = humidity = None
+        else:
+            with st.form("input_form"):
+                rainfall = st.number_input("Rainfall (mm)", value=45.0, step=1.0, format="%.1f")
+                soil = st.slider("Soil saturation (%)", min_value=0.0, max_value=100.0, value=60.0)
+                elevation = st.number_input("Elevation (m)", value=30.0, step=1.0)
+                temperature = st.number_input("Temperature (°C)", value=24.0, step=0.1, format="%.1f")
+                humidity = st.slider("Humidity (%)", min_value=0.0, max_value=100.0, value=75.0)
+                submitted = st.form_submit_button("Predict")
     with col2:
         st.subheader("Prediction result")
         result_box = st.empty()
         prob_chart_box = st.empty()
 
     if submitted:
-        sample = {"rainfall": rainfall, "soil_saturation": soil, "elevation": elevation, "temperature": temperature, "humidity": humidity}
-        preds, probs = predict_from_dict(sample, model_path=MODEL_PATH)
+        if not MODEL_AVAILABLE:
+            st.error("Prediction blocked: no model available.")
+        else:
+            sample = {"rainfall": rainfall, "soil_saturation": soil, "elevation": elevation, "temperature": temperature, "humidity": humidity}
+            preds, probs = predict_from_dict(sample, model_path=MODEL_PATH)
         pred = preds[0]
         probs_arr = probs[0]
         classes = list(le.classes_) if le is not None else [str(i) for i in range(len(probs_arr))]
@@ -136,8 +158,11 @@ else:
 if df_up is not None:
     required = ["rainfall","soil_saturation","elevation","temperature","humidity"]
     if set(required).issubset(df_up.columns):
-        preds, probs = predict_from_df(df_up[required], model_path=MODEL_PATH)
-        df_up["prediction"] = preds
+        if not MODEL_AVAILABLE:
+            st.error("No trained model found — cannot run batch predictions. Place a model at `models/xgb_flood_tuned.pkl` or run demo training.")
+        else:
+            preds, probs = predict_from_df(df_up[required], model_path=MODEL_PATH)
+            df_up["prediction"] = preds
         st.write(df_up.head())
         st.download_button("Download predictions CSV", df_up.to_csv(index=False), file_name="predictions.csv")
         # show class distribution
